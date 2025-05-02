@@ -1,39 +1,39 @@
 const express = require("express");
 const router = express.Router();
-// const User = require('../models/User');
+const User = require("../models/User");
 const auth = require("../middleware/auth");
-
-// Mock users from auth.js
-const mockUsers = [
-  {
-    _id: "1",
-    email: "test@example.com",
-    password: "password123",
-    name: "Test User",
-    messageCount: 5,
-    friendCount: 2,
-    achievementCount: 3,
-    joinDate: new Date("2023-01-01"),
-  },
-];
 
 // Get user profile
 router.get("/profile", auth, async (req, res) => {
   try {
-    // Find user by id
-    const user = mockUsers.find((user) => user._id === req.user.id);
+    let user;
+
+    // Check if we're using server-side storage or MongoDB
+    if (global.usingServerStorage()) {
+      // Using server-side storage
+      user = global.serverStorage.findUserById(req.user.id);
+    } else {
+      // Using MongoDB
+      user = await User.findById(req.user.id).select("-password");
+    }
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Create a copy without password
-    const userWithoutPassword = { ...user };
-    delete userWithoutPassword.password;
+    // Create a copy without password if using server-side storage
+    let userResponse;
+    if (global.usingServerStorage()) {
+      userResponse = { ...user };
+      delete userResponse.password;
+    } else {
+      // MongoDB already excluded password
+      userResponse = user;
+    }
 
-    console.log("Profile requested for user:", user.email);
+    console.log("Profile requested for user:", req.user.email);
 
-    res.json({ user: userWithoutPassword });
+    res.json({ user: userResponse });
   } catch (error) {
     console.error("Get profile error:", error);
     res.status(500).json({ message: "Server error" });
@@ -44,24 +44,43 @@ router.get("/profile", auth, async (req, res) => {
 router.put("/profile", auth, async (req, res) => {
   try {
     const { name } = req.body;
+    let updatedUser;
 
-    // Find user index
-    const userIndex = mockUsers.findIndex((user) => user._id === req.user.id);
+    // Check if we're using server-side storage or MongoDB
+    if (global.usingServerStorage()) {
+      // Using server-side storage
+      updatedUser = global.serverStorage.updateUser(req.user.id, { name });
 
-    if (userIndex === -1) {
-      return res.status(404).json({ message: "User not found" });
+      if (!updatedUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Create a copy without password
+      const userResponse = { ...updatedUser };
+      delete userResponse.password;
+
+      console.log(
+        "Profile updated for user (server storage):",
+        updatedUser.email
+      );
+
+      res.json({ user: userResponse });
+    } else {
+      // Using MongoDB
+      updatedUser = await User.findByIdAndUpdate(
+        req.user.id,
+        { name },
+        { new: true } // Return the updated document
+      ).select("-password");
+
+      if (!updatedUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      console.log("Profile updated for user (MongoDB):", req.user.email);
+
+      res.json({ user: updatedUser });
     }
-
-    // Update user
-    mockUsers[userIndex].name = name;
-
-    // Create a copy without password
-    const userWithoutPassword = { ...mockUsers[userIndex] };
-    delete userWithoutPassword.password;
-
-    console.log("Profile updated for user:", mockUsers[userIndex].email);
-
-    res.json({ user: userWithoutPassword });
   } catch (error) {
     console.error("Update profile error:", error);
     res.status(500).json({ message: "Server error" });

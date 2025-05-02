@@ -5,6 +5,8 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const jwt = require("jsonwebtoken");
+const fs = require("fs");
+const path = require("path");
 
 // Load environment variables
 dotenv.config();
@@ -59,32 +61,79 @@ const MONGO_URI =
 
 console.log("Attempting to connect to MongoDB...");
 
-// Flag to track if we're using mock data
-let usingMockData = false;
+// Server-side storage for when MongoDB is not available
+const serverStorage = {
+  users: [
+    {
+      _id: "1",
+      email: "test@example.com",
+      name: "Test User",
+      password: "password123",
+    },
+  ],
+  messages: [
+    {
+      _id: "1",
+      userId: { _id: "1", email: "test@example.com", name: "Test User" },
+      message: "Welcome to the chat!",
+      timestamp: new Date(),
+    },
+  ],
+  // Helper methods for server-side storage
+  findUserByEmail: function (email) {
+    return this.users.find((user) => user.email === email);
+  },
+  findUserById: function (id) {
+    return this.users.find((user) => user._id === id);
+  },
+  addUser: function (user) {
+    // Generate an ID if not provided
+    if (!user._id) {
+      user._id = (this.users.length + 1).toString();
+    }
+    this.users.push(user);
+    return user;
+  },
+  updateUser: function (id, updates) {
+    const index = this.users.findIndex((user) => user._id === id);
+    if (index !== -1) {
+      this.users[index] = { ...this.users[index], ...updates };
+      return this.users[index];
+    }
+    return null;
+  },
+  addMessage: function (message) {
+    // Generate an ID if not provided
+    if (!message._id) {
+      message._id = (this.messages.length + 1).toString();
+    }
+    this.messages.push(message);
+    return message;
+  },
+  getMessages: function (limit = 50) {
+    return this.messages.slice(-limit);
+  },
+};
 
+// Flag to track if we're using server-side storage
+let usingServerStorage = false;
+
+// Try to connect to MongoDB
 mongoose
   .connect(MONGO_URI, options)
   .then(() => {
     console.log("MongoDB connected successfully");
-    usingMockData = false;
+    usingServerStorage = false;
   })
   .catch((err) => {
     console.error("MongoDB connection error:", err);
-    console.log("Using mock data instead of MongoDB");
-    usingMockData = true;
+    console.log("Using server-side storage instead of MongoDB");
+    usingServerStorage = true;
   });
 
-// Mock data for testing without MongoDB
-const mockUsers = [{ _id: "1", email: "test@example.com", name: "Test User" }];
-
-const mockMessages = [
-  {
-    _id: "1",
-    userId: { _id: "1", email: "test@example.com", name: "Test User" },
-    message: "Welcome to the chat!",
-    timestamp: new Date(),
-  },
-];
+// Export the storage mechanism for use in routes
+global.serverStorage = serverStorage;
+global.usingServerStorage = () => usingServerStorage;
 
 // Routes
 app.use("/api/auth", authRoutes);
@@ -131,7 +180,18 @@ io.use((socket, next) => {
   if (!token) {
     console.log("Socket auth middleware - no token provided");
 
-    socket.user = { id: "guest", email: "guest@example.com" };
+    // Check if email is provided in handshake data
+    let guestEmail = "anonymous@example.com";
+
+    if (socket.handshake.query && socket.handshake.query.email) {
+      guestEmail = socket.handshake.query.email;
+    } else if (socket.handshake.auth && socket.handshake.auth.email) {
+      guestEmail = socket.handshake.auth.email;
+    }
+
+    // Use the provided email or default to anonymous
+    socket.user = { id: "guest", email: guestEmail };
+    console.log("Using guest account with email:", guestEmail);
     return next();
   }
 
@@ -155,8 +215,18 @@ io.use((socket, next) => {
     // In production, you would want to uncomment the next line
     // return next(new Error("Authentication error: Invalid token"));
 
-    // For now, create a mock user for testing
-    socket.user = { id: "guest", email: "guest@example.com" };
+    // Check if email is provided in handshake data
+    let guestEmail = "anonymous@example.com";
+
+    if (socket.handshake.query && socket.handshake.query.email) {
+      guestEmail = socket.handshake.query.email;
+    } else if (socket.handshake.auth && socket.handshake.auth.email) {
+      guestEmail = socket.handshake.auth.email;
+    }
+
+    // Use the provided email or default to anonymous
+    socket.user = { id: "guest", email: guestEmail };
+    console.log("Invalid token, using guest account with email:", guestEmail);
     next();
   }
 });
